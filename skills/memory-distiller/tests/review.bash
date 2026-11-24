@@ -159,6 +159,20 @@ check "audit gained no unattended row" "$AUDIT_BEFORE" \
 AUTOMATION_RUN_ID=fake-run-123 MEMORY_REVIEW_ALLOW_AUTOMATION=1 \
   python3 "$ROOT/scripts/review.py" --repo-dir . --apply > "$W/hatch.json" 2>&1
 check "explicit opt-in lets a supervised run through" "1" "$(jq "$W/hatch.json" "['applied']")"
+# ...but only on an actual truthy value. A config file or shell that writes the
+# flag off as "0" must not open it: a bare `if os.environ.get(...)` reads "0" as
+# on, which would turn the safe default into the unsafe one.
+rm -f .agent/memory-human-turn
+AUTOMATION_RUN_ID=fake-run-123 MEMORY_REVIEW_ALLOW_AUTOMATION=0 \
+  python3 "$ROOT/scripts/review.py" --repo-dir . --apply > "$W/zero.json" 2>&1
+check '"0" does not open the gate' "1" "$?"
+check '"0" still refuses with a reason' "yes" \
+  "$(grep -q 'unattended automation' "$W/zero.json" && echo yes || echo no)"
+check '"0" writes no human-turn marker' "no" \
+  "$(test -f .agent/memory-human-turn && echo yes || echo no)"
+AUTOMATION_RUN_ID=fake-run-123 MEMORY_REVIEW_ALLOW_AUTOMATION=false \
+  python3 "$ROOT/scripts/review.py" --repo-dir . --apply > "$W/false.json" 2>&1
+check '"false" does not open the gate' "1" "$?"
 
 echo
 [ "$fails" -eq 0 ] && { echo "all review checks passed"; exit 0; } || { echo "$fails FAILED"; exit 1; }

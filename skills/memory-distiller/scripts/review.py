@@ -47,6 +47,17 @@ API = os.environ.get("GH_API_BASE", "https://api.github.com").rstrip("/")
 TRUSTED_ASSOCIATION = {"OWNER", "MEMBER", "COLLABORATOR"}
 HUMAN_TURNS_FILE = ".agent/memory-human-turn"
 
+
+def truthy(value):
+    """Parse a boolean-ish env var.
+
+    A bare `if os.environ.get(...)` treats "0" and "false" as on, which inverts
+    any opt-in flag a config file or a shell writes as false. Same vocabulary the
+    driver uses for MEMORY_DRY_RUN.
+    """
+    return (value or "").strip().lower() not in ("", "0", "false", "no", "off")
+
+
 ADOPT_RE = re.compile(
     r"^\s*memory:\s*adopt\s+(?P<id>[0-9a-f]{6,40})\s+as\s+"
     r"[\"“](?P<rule>.+?)[\"”]\s*"
@@ -172,7 +183,7 @@ def claim_human_turn(repo_dir, decisions):
     therefore only possible from a live conversation a human is driving, which is
     the one signal here that the shared PAT cannot counterfeit.
     """
-    if in_automation() and not os.environ.get("MEMORY_REVIEW_ALLOW_AUTOMATION"):
+    if in_automation() and not truthy(os.environ.get("MEMORY_REVIEW_ALLOW_AUTOMATION")):
         raise SystemExit(
             "refusing to apply decisions from an unattended automation run "
             f"(run id {in_automation()!r}).\n"

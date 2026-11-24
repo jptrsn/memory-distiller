@@ -44,7 +44,7 @@ cp -r memory-distiller/skills/memory-distiller <repo>/.agents/skills/
 ```
 
 Then give the repo a config. `scripts/fixture/.agent/memory-config.json` is a
-working example; [`references/repo-config.md`](references/repo-config.md) covers
+working example; [`references/repo-config.md`](skills/memory-distiller/references/repo-config.md) covers
 every field. The minimum:
 
 ```json
@@ -65,29 +65,50 @@ every field. The minimum:
 `adopt` writes when you don't pass `--target`.
 
 A repo with no T2 files yet gets seeded from its AI-DLC corpus — see
-[`references/seeding.md`](references/seeding.md).
+[`references/seeding.md`](skills/memory-distiller/references/seeding.md).
 
 ## Run the nightly pass
 
-Deterministic, no LLM call, and structurally unable to touch T2. As an OpenHands
-automation with a `script` runner:
+Deterministic, no LLM call, and structurally unable to touch T2.
+
+Install it as an OpenHands automation from this repo — `.plugin/plugin.json`
+declares a `script` runner, so no LLM is in the loop and the repo list is a
+config field rather than an edit to code:
+
+| Config field | Meaning |
+|---|---|
+| `repos` | list of `owner/repo`, optionally `owner/repo@base-branch` |
+| `dry_run` | `true` (default) = everything except labels, push, and open PR |
+| `review_bots` | logins whose comments are never treated as decisions |
+| `review_allow_automation` | accept an automation comment as the human turn — leave off |
+
+Leave `dry_run` on for the first run and read the counts it prints. Nothing
+touches GitHub until you turn it off: no labels are created, no issue label is
+flipped, no branch is pushed, no PR is opened.
+
+By hand, the same driver reads the same settings from the environment. Env wins
+over the config file, so a dispatch can override a value ad hoc:
 
 ```bash
-MEMORY_REPOS=owner/repo@develop python3 skills/memory-distiller/automation/main.py
+MEMORY_REPOS=owner/repo@develop MEMORY_DRY_RUN=1 \
+  python3 skills/memory-distiller/automation/main.py
 ```
 
 | Variable | Meaning |
 |---|---|
 | `MEMORY_REPOS` | comma-separated `owner/repo`, optionally `@base-branch` |
-| `MEMORY_DRY_RUN` | `1` = everything except push and open PR |
+| `MEMORY_DRY_RUN` | `1` = everything except labels, push, and open PR |
 | `GITHUB_PERSONAL_ACCESS_TOKEN` | contents+issues+PRs; fetched from the agent server's secret store in automation runs |
 | `MEMORY_REVIEW_BOTS` | logins whose comments are never treated as decisions |
+
+A run over zero repos refuses instead of exiting 0, so a mis-set list cannot
+report green having consolidated nothing.
 
 One consolidation PR opens per repo, reusing the same branch night to night so
 `surface` doesn't regenerate candidates it already proposed. The run prints one
 JSON document and exits non-zero when anything needs you — a repo whose label
 writes silently failed is reported `degraded`, not `ok`. See
-[`references/nightly-run.md`](references/nightly-run.md) for the status table and
+[`references/nightly-run.md`](skills/memory-distiller/references/nightly-run.md) for the status table and
 what each field means.
 
 Base-branch resolution matters for GitFlow repos: `@develop` is validated

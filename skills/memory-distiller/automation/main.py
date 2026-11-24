@@ -95,7 +95,12 @@ def apply_plugin_config():
         if isinstance(value, (list, tuple)):
             value = ",".join(str(v) for v in value)
         elif isinstance(value, bool):
-            value = "1" if value else "0"
+            # Never write "0": the gates below this read the variable with a bare
+            # truthiness test, and "0" is a truthy string. Setting
+            # review_allow_automation: false would then have enabled it.
+            if value:
+                os.environ[env_key] = "1"
+            continue
         else:
             value = str(value)
         os.environ[env_key] = value

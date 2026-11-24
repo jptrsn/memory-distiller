@@ -1,0 +1,56 @@
+{
+  "name": "memory-distiller",
+  "version": "0.1.0",
+  "description": "Nightly T0->T1 memory consolidation: drains the written-up report queue, surfaces reviewable candidates, and opens one PR per repository. No LLM runs; promotion to durable memory stays a human act.",
+  "automation": {
+    "schema_version": "openhands.automation.plugin.v1",
+    "entrypoint": {
+      "runner": "script",
+      "command": "python3 skills/memory-distiller/automation/main.py"
+    },
+    "runtime": {
+      "agent_profile": {
+        "required": true,
+        "default_name": "default"
+      }
+    },
+    "config_schema": {
+      "type": "object",
+      "required": ["repos"],
+      "additionalProperties": false,
+      "properties": {
+        "repos": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Repositories to consolidate, as owner/name. Append @branch when the branch the consolidation PR should land on differs from the remote's default, e.g. owner/repo@develop.",
+          "items": {
+            "type": "string",
+            "pattern": "^[^/\\s]+/[^/\\s]+(@[A-Za-z0-9._/-]+)?$"
+          }
+        },
+        "dry_run": {
+          "type": "boolean",
+          "default": true,
+          "description": "Preview only: surface candidates into the throwaway clone and report the counts, but create no labels, flip no issue labels, push no branch, and open no PR. Leave on for the first run, then turn it off once the counts look right."
+        },
+        "review_bots": {
+          "type": "array",
+          "description": "Logins whose turns do not count as the human turn that authorises adopt/dismiss/correct. The skill already covers openhands and all-hands-bot; add any other bot identity that posts on your behalf.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "review_allow_automation": {
+          "type": "boolean",
+          "default": false,
+          "description": "Accept an automation-created issue comment as the human turn. Weakens the gate that stops an LLM promoting its own claims; enable only if a real human edit is required before your reviews are posted."
+        }
+      }
+    },
+    "suggested_trigger_template": {
+      "type": "cron",
+      "schedule": "0 3 * * *",
+      "timezone": "UTC"
+    }
+  }
+}
