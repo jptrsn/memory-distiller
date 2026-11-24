@@ -122,16 +122,6 @@ def health(summary):
 DRY_RUN = os.environ.get("MEMORY_DRY_RUN", "") not in ("", "0", "false")
 
 
-# Fail fast rather than consolidate nothing and exit 0. A scheduled run with an
-# unset MEMORY_REPOS would otherwise report COMPLETED having touched no repo —
-# the same silent-green failure this driver refuses elsewhere.
-if not REPOS:
-    raise SystemExit(
-        "MEMORY_REPOS is empty and no default is configured; refusing to run a "
-        "consolidation pass over zero repositories. Set MEMORY_REPOS to a "
-        "comma-separated owner/repo list (optionally owner/repo@branch).")
-
-
 def repo_slug(repo):
     """Directory name for a repo, tolerant of local bare paths and nested groups."""
     tail = repo.rstrip("/").split("/")[-1]
@@ -342,6 +332,23 @@ def _consolidate(spec, work_root, helper):
         summary["labels"] = "n/a (local repo)"
         summary["threads_ingested"] = 0
         summary["threads"] = "n/a (local repo)"
+    elif DRY_RUN:
+        # Dry run must mean dry everywhere. `ensure` creates labels and `threads`
+        # flips memory-needs-review -> memory-ingested; doing either without the
+        # consolidation PR behind it is exactly the orphaned-label drift that
+        # `labels.py reconcile` exists to repair, so a preview run would damage
+        # the live queue it was only meant to inspect. surface() still runs for
+        # real: it writes only into this throwaway clone, which the next run
+        # deletes, and its output is what the previewed PR body is built from.
+        summary["labels"] = "n/a (dry run)"
+        summary["threads"] = "n/a (dry run)"
+        code, out, err = run(
+            [sys.executable, f"{SCRIPTS}/threads.py", "--repo-dir", ".", "--dry-run"],
+            cwd=work, check=False)
+        summary["threads_ingested"] = (
+            json.loads(out).get("threads_written", 0) if code == 0 else 0)
+        if code != 0:
+            summary["threads_error"] = err[:160]
     else:
         # ensure is idempotent and argument-light, so a repo whose labels were
         # never created still self-starts on its first run.
@@ -465,6 +472,16 @@ def consolidate(spec, work_root, helper):
 def main():
     if not TOKEN:
         raise RuntimeError("GITHUB_PERSONAL_ACCESS_TOKEN is not set")
+    # Fail fast rather than consolidate nothing and exit 0: a scheduled run with
+    # an unset MEMORY_REPOS would otherwise report COMPLETED having touched no
+    # repo — the same silent-green failure this driver refuses elsewhere. Lives
+    # here, not at module scope, so `import main` for the health classifier and
+    # other diagnostics still works without a configured repo list.
+    if not REPOS:
+        raise SystemExit(
+            "MEMORY_REPOS is empty and no default is configured; refusing to run "
+            "a consolidation pass over zero repositories. Set MEMORY_REPOS to a "
+            "comma-separated owner/repo list (optionally owner/repo@branch).")
     work_root = os.path.join(os.environ.get("TMPDIR", "/tmp"), "memory-nightly")
     helper = write_cred_helper(work_root)
     results = []

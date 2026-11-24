@@ -50,13 +50,19 @@ every field. The minimum:
 ```json
 {
   "repo": "owner/name",
-  "t0_roots": [".agent/reports/*.md", ".ai-dlc/*/reports/*.md"],
-  "t2_targets": {
-    "invariants": ".agent/invariants.md",
-    "blockers": ".agent/blockers.md"
+  "roots": {
+    "agent-reports": { "tier": "T0", "glob": ".agent/reports/*.md", "kind": "unit report" }
+  },
+  "targets": {
+    "assumption": ".agent/invariants.md",
+    "blocker": ".agent/blockers.md"
   }
 }
 ```
+
+`roots` is required (the loader exits if it's missing) and an entry needs
+`tier: "T0"` to be surfaced at all. `targets` maps an evidence class to the T2 file
+`adopt` writes when you don't pass `--target`.
 
 A repo with no T2 files yet gets seeded from its AI-DLC corpus — see
 [`references/seeding.md`](references/seeding.md).

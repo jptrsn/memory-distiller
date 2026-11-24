@@ -22,6 +22,8 @@ cases = [
   ("local repo",         {"labels":"ok","pr":"local repo (PR step skipped)"}, "ok"),
   ("not installed",      {"status":"skipped","reason":"x"}, "skipped"),
   ("local repo n/a",     {"labels":"n/a (local repo)","threads":"n/a (local repo)","pr":"local repo (PR step skipped)"}, "ok"),
+  ("dry run n/a",        {"labels":"n/a (dry run)","threads":"n/a (dry run)","pr":"dry-run (not pushed)"}, "ok"),
+  ("dry run + real fail",{"labels":"n/a (dry run)","threads_error":"Traceback","pr":"dry-run (not pushed)"}, "degraded"),
 ]
 bad=0
 for name, summary, want in cases:
