@@ -36,10 +36,18 @@ from datetime import datetime, timezone
 # Pin the base with @branch when the repo's factory convention differs from its
 # default branch — e.g. work lands on `develop` while the remote HEAD is `main`.
 DEFAULT_REPOS = []
-# Overridable so a deployment can narrow the factory set, and so the test can
-# point the driver at a throwaway local bare repo.
-REPOS = [r for r in os.environ.get("MEMORY_REPOS", "").split(",") if r.strip()] \
-    or DEFAULT_REPOS
+
+
+def load_repos():
+    """Resolve the repo list at run time, not import time.
+
+    A plugin-spec run folds `.automation/config.json` into the environment inside
+    main(), so reading the env at import time would miss it entirely.
+    """
+    return [r for r in os.environ.get("MEMORY_REPOS", "").split(",") if r.strip()] \
+        or DEFAULT_REPOS
+
+
 BRANCH = "openhands/memory-consolidation"
 SCRIPTS = ".agents/skills/memory-distiller/scripts"
 
@@ -63,6 +71,34 @@ def render_body(work, counts):
         lines.append(f"(candidate table unavailable: {type(exc).__name__}: {exc})")
         return "\n".join(lines)
 API = "https://api.github.com"
+
+
+def apply_plugin_config():
+    """Fold the plugin-spec config into the environment.
+
+    `.automation/config.json` is written by the automation service for a
+    plugin-spec run. Env wins over config so a dispatch can still be overridden
+    ad hoc, and so the tests — which set only env — are unaffected when no
+    config file exists.
+    """
+    path = os.environ.get("AUTOMATION_CONFIG_PATH") or os.path.join(
+        os.environ.get("AUTOMATION_PLUGIN_ROOT", "."), ".automation", "config.json")
+    try:
+        with open(path) as fh:
+            cfg = json.load(fh)
+    except (OSError, ValueError):
+        return
+    for key, value in cfg.items():
+        env_key = f"MEMORY_{key.upper()}"
+        if value in (None, "", []) or os.environ.get(env_key):
+            continue
+        if isinstance(value, (list, tuple)):
+            value = ",".join(str(v) for v in value)
+        elif isinstance(value, bool):
+            value = "1" if value else "0"
+        else:
+            value = str(value)
+        os.environ[env_key] = value
 
 # The nightly run may commit these and nothing else. Candidates are inert until
 # adopted, threads/ holds the ingested host reports plus the ledger that keeps
@@ -470,6 +506,12 @@ def consolidate(spec, work_root, helper):
 
 
 def main():
+    global DRY_RUN
+    apply_plugin_config()
+    # Re-read after the config lands: both of these are module constants, so a
+    # plugin-spec config.json would otherwise be folded into env too late to see.
+    DRY_RUN = os.environ.get("MEMORY_DRY_RUN", "") not in ("", "0", "false")
+    repos = load_repos()
     if not TOKEN:
         raise RuntimeError("GITHUB_PERSONAL_ACCESS_TOKEN is not set")
     # Fail fast rather than consolidate nothing and exit 0: a scheduled run with
@@ -477,7 +519,7 @@ def main():
     # repo — the same silent-green failure this driver refuses elsewhere. Lives
     # here, not at module scope, so `import main` for the health classifier and
     # other diagnostics still works without a configured repo list.
-    if not REPOS:
+    if not repos:
         raise SystemExit(
             "MEMORY_REPOS is empty and no default is configured; refusing to run "
             "a consolidation pass over zero repositories. Set MEMORY_REPOS to a "
@@ -485,7 +527,7 @@ def main():
     work_root = os.path.join(os.environ.get("TMPDIR", "/tmp"), "memory-nightly")
     helper = write_cred_helper(work_root)
     results = []
-    for spec in REPOS:
+    for spec in repos:
         try:
             # consolidate() clones its own working tree: the clone target depends
             # on the base branch, which is only known once the @branch suffix and
@@ -508,7 +550,7 @@ def main():
                       "dry_run": DRY_RUN, "summary": counts,
                       "broken": broken, "results": results}, indent=2))
     if broken:
-        fire_callback("FAILED", f"{len(broken)}/{len(REPOS)} repos need attention: "
+        fire_callback("FAILED", f"{len(broken)}/{len(repos)} repos need attention: "
                                 f"{', '.join(str(b) for b in broken)}")
         return 1
     fire_callback("COMPLETED")
