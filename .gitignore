@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.agent/memory-human-turn
+.agent/candidates/
+.agent/memory-audit.md

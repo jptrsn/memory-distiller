@@ -1,0 +1,43 @@
+{
+  "repo": "example/fixture",
+  "roots": {
+    "agent-reports": {
+      "tier": "T0",
+      "glob": ".agent/reports/*.md",
+      "kind": "unit report"
+    },
+    "night-reports": {
+      "tier": "T0",
+      "glob": ".ai-dlc/*/reports/*.md",
+      "kind": "issue report"
+    },
+    "threads": {
+      "tier": "T0",
+      "glob": ".agent/threads/*.md",
+      "kind": "thread report"
+    }
+  },
+  "targets": {
+    "unverified": ".agent/invariants.md",
+    "unknown": ".agent/invariants.md",
+    "assumption": ".agent/invariants.md",
+    "deviation": ".agent/blockers.md",
+    "blocker": ".agent/blockers.md",
+    "correction": ".agent/invariants.md",
+    "supervised": ".agent/invariants.md",
+    "review-round": ".agent/invariants.md",
+    "finding": ".agent/invariants.md",
+    "root-cause": ".agent/invariants.md",
+    "test-blind-spot": ".agent/invariants.md",
+    "triage-answer": ".agent/invariants.md"
+  },
+  "provenance": {
+    "threads": [
+      "source",
+      "repo",
+      "state",
+      "labels",
+      "ingested"
+    ]
+  }
+}
