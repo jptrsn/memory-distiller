@@ -323,33 +323,82 @@ class Git:
 
 
 def clone(repo, work, work_root, helper, base):
-    """Fresh clone; a stale directory from an earlier run would carry old state.
+    """Fresh clone of the base branch; a stale directory from an earlier run
+    would carry old state.
 
-    Prefer the existing consolidation branch over the base branch: candidates
-    already committed there are then present in the tree, surface() writes
-    nothing, and the run reports `unchanged`. Always cloning the base branch
-    would regenerate the same candidates every night and force-push a new
-    commit forever, because surface() only de-duplicates against what is
-    already on disk.
+    Always the base, never the consolidation branch. Cloning the branch keeps
+    surface() from regenerating candidates it already proposed, but it also pins
+    the T0 corpus to the commit that branch was cut from: every report merged to
+    base afterwards is invisible, and the run reports `unchanged` forever. The
+    candidate de-duplication is instead restored per-path in restore_state(), so
+    freshness and idempotence are both kept.
+
+    Returns the consolidation branch's ref when it exists, None otherwise.
     """
     dest = os.path.join(work_root, work)
     if os.path.isdir(dest):
         shutil.rmtree(dest)
     g = Git(helper)
     url = clone_url(repo)
-    code, _, _ = g("ls-remote", "--exit-code", "--heads", url, BRANCH,
-                   cwd=work_root, check=False)
-    source = BRANCH if code == 0 else base
-    g("clone", "--depth", "50", "--branch", source, url, dest, cwd=work_root)
-    return source
+    g("clone", "--depth", "50", "--branch", base, url, dest, cwd=work_root)
+    # --depth implies --single-branch, so origin/<branch> is never created for a
+    # branch other than base and an explicit refspec would be needed. FETCH_HEAD
+    # is written by the fetch above; pin it to a SHA now rather than trusting the
+    # pseudo-ref to survive the rest of the run.
+    code, _, _ = g("fetch", "--depth", "50", "origin", BRANCH, cwd=dest, check=False)
+    if code != 0:
+        return None
+    code, sha, _ = g("rev-parse", "--verify", "--quiet", "FETCH_HEAD", cwd=dest,
+                     check=False)
+    return sha.strip() or None
+
+
+# State that must survive across runs, restored from the consolidation branch.
+# candidates/ is what makes surface() idempotent; threads/ carries the ingest
+# ledger, which is the only thing standing between a fresh clone and re-ingesting
+# every issue comment and appending duplicate candidates each night; the audit log
+# accumulates, so leaving it out would read as a deletion against the branch and
+# the nightly commit would erase the record.
+STATE_PATHS = (".agent/candidates", ".agent/threads", ".agent/memory-audit.md")
+
+
+def restore_state(work, ref, g):
+    """Overlay the previous run's memory state onto a fresh base clone.
+
+    Confined to STATE_PATHS by construction: the reports themselves, and every T2
+    file, stay exactly as base has them.
+    """
+    if not ref:
+        return []
+    restored = []
+    for path in STATE_PATHS:
+        code, _, _ = g("checkout", ref, "--", path, cwd=work, check=False)
+        if code == 0:
+            restored.append(path)
+    return restored
+
+
+def unstage(g, work, path, baseline="HEAD"):
+    """Drop a path from the nightly commit, index and worktree alike.
+
+    Reverting to `baseline` rather than just unstaging: a disallowed file that
+    surface() newly created is untracked in baseline, so unstaging alone would
+    leave it on disk and `add -A` would pick it up again on the next pass.
+    """
+    code, _, _ = g("checkout", baseline, "--", path, cwd=work, check=False)
+    if code != 0:
+        g("rm", "-f", "--cached", "--", path, cwd=work, check=False)
+        target = os.path.join(work, path)
+        if os.path.isfile(target):
+            os.remove(target)
 
 
 def _consolidate(spec, work_root, helper):
     repo, wanted = split_spec(spec)
     name = repo_slug(repo)
     base = base_branch(repo, wanted, helper)
-    clone(repo, name, work_root, helper, base)
     g = Git(helper)
+    state_ref = clone(repo, name, work_root, helper, base)
     summary = {"repo": repo, "base_branch": base}
 
     if not os.path.isdir(os.path.join(work_root, name, SCRIPTS)):
@@ -361,6 +410,9 @@ def _consolidate(spec, work_root, helper):
     # Filled in at the end by health(); an early return above is always a
     # deliberate skip, never an unexamined "ok".
     work = os.path.join(work_root, name)
+    # Must happen before threads.py and surface() run: both de-duplicate against
+    # what is already on disk, and the clone is fresh off base.
+    summary["state_restored"] = restore_state(work, state_ref, g)
 
     # Labels and thread ingest both call the GitHub API, so on a local-path repo
     # (no owner) they are not applicable rather than failed — the same
@@ -423,11 +475,23 @@ def _consolidate(spec, work_root, helper):
     # up byte-compiled droppings — which, once committed, return as modified on
     # every subsequent run and defeat the unchanged check permanently.
     g("add", "-A", "--", ".agent", cwd=work, check=False)
-    # Decide from the index, not `status --porcelain`: porcelain also reports
-    # untracked files this job will never commit (regenerated .pyc, editor
-    # droppings), which would make every run look dirty.
-    _, staged, _ = g("diff", "--cached", "--name-only", cwd=work)
-    changed = [ln for ln in staged.splitlines() if ln.strip()]
+    # Two baselines, deliberately: the commit is built on fresh base so the PR
+    # carries only the memory delta, but "did anything change" is answered against
+    # the last nightly commit. Diffing against base would call every restored
+    # candidate a new addition forever, since base has never seen them, and the
+    # run would never again report `unchanged`. With no prior commit, base is the
+    # only baseline available.
+    baseline = state_ref or "HEAD"
+
+    def staged_paths():
+        # Decide from the index, not `status --porcelain`: porcelain also reports
+        # untracked files this job will never commit (regenerated .pyc, editor
+        # droppings), which would make every run look dirty.
+        _, out, _ = g("diff", "--cached", "--name-only", baseline, "--", ".agent",
+                      cwd=work)
+        return [ln for ln in out.splitlines() if ln.strip()]
+
+    changed = staged_paths()
     # Boundary enforced, not assumed: a bug in surface() that wrote a T2 file, or
     # a stray edit left in the tree, must not ride out on an automated PR. Drop
     # the offending paths rather than abort the run — one bad path should not
@@ -436,9 +500,8 @@ def _consolidate(spec, work_root, helper):
     if disallowed:
         summary["refused_paths"] = disallowed
         for path in disallowed:
-            g("restore", "--staged", "--", path, cwd=work, check=False)
-        _, staged, _ = g("diff", "--cached", "--name-only", cwd=work)
-        changed = [ln for ln in staged.splitlines() if ln.strip()]
+            unstage(g, work, path)
+        changed = staged_paths()
     summary["files_changed"] = len(changed)
     if not changed:
         summary["pr"] = ("refused (only disallowed paths staged)" if disallowed

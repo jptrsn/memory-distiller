@@ -97,6 +97,37 @@ check "run 3 reports unchanged" "unchanged" "$(field "$W/out3.json" pr)"
 check "no byte-compiled files committed" "" \
   "$(git -C "$REMOTE" ls-tree -r --name-only refs/heads/openhands/memory-consolidation 2>/dev/null | grep '__pycache__\|\.pyc$' || true)"
 
+echo "--- new evidence on base must still be distilled ---"
+# The clone prefers the consolidation branch so surface() sees the candidates it
+# already proposed. The T0 reports ride along from that branch's commit, so if
+# the base moved since, the new reports are invisible and the run reports
+# `unchanged` forever. The fix reads T0 from base while keeping candidates from
+# the branch; this is the check that would fail without it.
+cat > "$SEED/.agent/reports/unit-03-fresh-report.md" <<'RPT'
+# Unit report — unit-03 (added after the branch existed)
+
+## OBSERVED — actions you took and results you saw
+
+- `test_freshly_added_route_returns_json` (TestClient `GET /api/v1/things`)
+  → 200, body `{"things": []}`.
+
+## ASSUMPTIONS
+
+- The `/api/v1/things` collection is unordered; clients sort client-side.
+RPT
+git -C "$SEED" add -A && git -C "$SEED" commit -qm "add unit-03 report"
+git -C "$SEED" push -q "$REMOTE" develop
+python3 automation/main.py > "$W/out4.json" 2>/dev/null
+check "a new base report is not silently ignored" "1" \
+  "$(python3 -c "
+import json; d=json.load(open('$W/out4.json'))['results'][0]
+print(1 if d.get('candidates_written',0) > 0 and d.get('pr') != 'unchanged' else 0)")"
+check "the new candidate reached the branch" "yes" \
+  "$(git -C "$REMOTE" ls-tree -r --name-only refs/heads/openhands/memory-consolidation 2>/dev/null | grep -q 'unit-03' && echo yes || echo no)"
+check "run 5 converges back to unchanged" "unchanged" \
+  "$(python3 automation/main.py 2>/dev/null | python3 -c "
+import json,sys; print(json.load(sys.stdin)['results'][0].get('pr'))")"
+
 echo "--- the nightly run must not commit T2 ---"
 # Fault injection: consolidate() executes the distill.py *inside the clone*, so
 # patching that copy simulates a surface() bug that reaches for adopted memory.
@@ -110,13 +141,17 @@ git -C "$SEED" add -A && git -C "$SEED" commit -qm inject && git -C "$SEED" push
 git -C "$REMOTE" update-ref -d refs/heads/openhands/memory-consolidation
 python3 automation/main.py > "$W/out4.json" 2>/dev/null
 
-# The bug must have actually fired, or these checks would pass vacuously.
-check "injected bug wrote T2 in the working tree" "yes" \
-  "$(test -f "$TMPDIR/memory-nightly/remote/.agent/invariants.md" && echo yes || echo no)"
-check "the run reported the refusal" "yes" \
+# The bug must have actually fired, or the checks below would pass vacuously.
+# It cannot pass silently: `refused_paths` is only populated if the file was
+# really written and staged, so a fixture that never fires fails there.
+check "injected bug was caught and reported" "yes" \
   "$(python3 -c "
 import json;r=json.load(open('$W/out4.json'))['results'][0]
 print('yes' if any('invariants' in x for x in r.get('refused_paths',[])) else 'no')" 2>/dev/null)"
+# The guard now removes the path from the worktree too, not just the index: a
+# file left on disk is one `add -A` away from riding out on a later run.
+check "refused T2 removed from the worktree" "no" \
+  "$(test -f "$TMPDIR/memory-nightly/remote/.agent/invariants.md" && echo yes || echo no)"
 nightly_touched=$(git -C "$REMOTE" show --name-only --pretty=format: refs/heads/openhands/memory-consolidation 2>/dev/null | grep -v '^$')
 check "nightly commit introduces no T2 path" "" \
   "$(echo "$nightly_touched" | grep -E '\.agent/(invariants|blockers)\.md|^\.agent/memory/' || true)"
