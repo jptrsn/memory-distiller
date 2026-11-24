@@ -53,6 +53,11 @@ SKIP = [
     re.compile(r"^`?[0-9a-f]{7,40}`?\s+[a-z]+\(", re.I),  # conventional-commit line
     re.compile(r"^https?://\S+$"),
 ]
+# Classes whose evidence is, in principle, ready to become a binding rule. Being
+# listed here is not enough on its own: the candidate also has to score above
+# zero for durability, or it renders as provisional. `observed` is deliberately
+# absent — per-test assertions are forbidden from memory.
+PROMOTABLE_CLASSES = {"correction", "supervised", "blocker", "review-round"}
 # Signals that a claim is durable enough to become an invariant.
 DURABLE = [
     (re.compile(r"\b(always|never|must|must not|forbidden|only|sole|single source)\b", re.I), 3),
@@ -177,7 +182,8 @@ def cmd_surface(args):
                 if finding:
                     prov["findings"] = [f[2] for f in finding][:5]
                 extra = cfg.get("provenance", {}).get(origin, [])
-                body_md = render_candidate(cid, item, cls, prov, score(item), extra)
+                body_md = render_candidate(cid, item, cls, prov, score(item), extra,
+                                           markers)
                 target = repo_dir / CANDIDATES_DIR / f"{cid}.md"
                 if not args.dry_run:
                     target.parent.mkdir(parents=True, exist_ok=True)
@@ -237,19 +243,34 @@ def write_quarantine(repo_dir: Path, items):
         )
 
 
-def render_candidate(cid, item, cls, prov, s, extra_fields):
+def render_candidate(cid, item, cls, prov, s, extra_fields, markers=()):
     """A T1 candidate: small, self-contained, carrying its own provenance.
 
     The claim is quoted verbatim — the distiller never rewrites a claim, only
     classifies it. Provenance is what makes an adopt/dismiss decision
     reviewable months later.
+
+    `promotability` is what a reviewer sees first, so it has to agree with the
+    evidence next to it. A class that is promotable in principle is still only
+    provisional when durability_score is 0: that score is a sum of matched
+    durable-language signals (always/never/must/root cause/regression), so 0
+    means the surface pass found none — a "fixed (SHA)" or "GATES re-run tails"
+    bookkeeping line, not a rule. `host-bound` outranks everything: a claim that
+    needs a device or an IDF build cannot be settled from the report at all, and
+    must never read as ready to adopt.
     """
+    if markers:
+        promotability = "host-bound"
+    elif s > 0 and cls in PROMOTABLE_CLASSES:
+        promotability = "promotable"
+    else:
+        promotability = "provisional"
     lines = [
         "---",
         f"id: {cid}",
         "status: pending",
         f"evidence_class: {cls}",
-        f"promotability: {'promotable' if cls in ('observed', 'correction', 'supervised', 'blocker', 'review-round') else 'provisional'}",
+        f"promotability: {promotability}",
         f"durability_score: {s}",
         f"repo: {prov['repo']}",
         f"source_file: {prov['source_file']}",

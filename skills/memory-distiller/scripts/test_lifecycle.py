@@ -203,6 +203,30 @@ def main():
         qt = qq[0].read_text()
         check("quarantined_host_bound" in qt, "quarantine file records its status")
         check("not adoptable" in qt.lower(), "quarantine file says it is not adoptable")
+    # promotability must agree with the evidence printed beside it. Real corpus
+    # data exposed 125 bookkeeping lines ("fixed (c93d789)", "GATES re-run tails")
+    # labelled promotable at durability_score 0 — the reviewer's first read of a
+    # candidate, so a wrong value there is how noise gets adopted.
+    def fm(f, key):
+        for line in f.read_text().split("---\n")[1].splitlines():
+            if line.startswith(f"{key}: "):
+                return line.split(": ", 1)[1].strip()
+        return None
+
+    allc = list((repo / ".agent/candidates").glob("*.md"))
+    mism = [f.name for f in allc
+            if fm(f, "promotability") == "promotable" and fm(f, "durability_score") == "0"]
+    check(not mism, f"no promotable candidate scores 0 ({len(mism)} found: {mism[:3]})")
+    # --keep-host-bound surfaces quarantined claims, so they must be identifiable:
+    # review.py flags `promotability == "host-bound"`, and a host-bound claim that
+    # renders as provisional is how an unverified device claim reaches T2.
+    if has_threads or (repo / ".agent/reports").exists():
+        run(distill, *base, "surface", "--keep-host-bound", label="surface --keep-host-bound")
+        hb = [f for f in (repo / ".agent/candidates").glob("*.md")
+              if fm(f, "promotability") == "host-bound"]
+        check(len(hb) >= 1, f"--keep-host-bound marks host-bound items as such ({len(hb)})")
+        check(all("promotability: promotable" not in f.read_text() for f in hb),
+              "host-bound items are never labelled promotable")
     # A settled claim that merely mentions a device must stay a candidate.
     kept = [f for f in (repo / ".agent/candidates").glob("*.md")
             if "pixel" in f.read_text().lower() or "device" in f.read_text().lower()]
